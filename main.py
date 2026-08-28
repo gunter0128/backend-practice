@@ -1,7 +1,7 @@
 import httpx
 
 
-def github_get(path):
+def github_get(path: str) -> dict | list | None:
     try:
         response = httpx.get(f"https://api.github.com/users/{path}")
     except httpx.RequestError:
@@ -11,15 +11,15 @@ def github_get(path):
         return None
     return response.json()
 
-def get_github_user(username):
+def get_github_user(username: str) -> dict | None:
     return github_get(username)
 
 
-def get_user_repos(username):
+def get_user_repos(username: str) -> list | None:
     return github_get(f"{username}/repos")
 
 
-def print_user(user):
+def print_user(user: dict) -> None:
     print(f"Name: {user['name']}")
     print(f"Repos: {user['public_repos']}")
     print(f"Followers: {user['followers']}")
