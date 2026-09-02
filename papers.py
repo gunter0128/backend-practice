@@ -37,11 +37,17 @@ class PaperDB(Base):
     title = Column(String, nullable=False)
     year = Column(Integer, nullable=False)
     author_id = Column(Integer, ForeignKey("authors.id"))
+    note = Column(String, nullable=True) # 新增欄位測試 alembic
 
     author = relationship("AuthorDB", back_populates="papers")
 
 
-Base.metadata.create_all(engine) # 看 Base 清單裡有哪些表 實際去資料庫裡把它們建出來
+# Base.metadata.create_all(engine) 
+# 不這麼用了 因為這邊只能創建新表 對於舊表的變動無法更改 要手動重建.db檔
+# 改用以下兩行指令讓 alembic 自動去管理資料庫的變動與同步
+# alembic revision --autogenerate -m "描述"
+# alembic upgrade head
+
 
 
 class Paper(BaseModel):
