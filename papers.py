@@ -2,6 +2,14 @@ from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import create_engine, Column, Integer, String, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
+import bcrypt
+import jwt
+from datetime import datetime, timedelta, timezone
+
+
+SECRET_KEY = "dev-secret-change-me" # 簽章用的密鑰 之後要移到 .env / config
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 
 app = FastAPI()
@@ -21,6 +29,28 @@ def get_db():
         db.close()
 
 
+# 因為 bcrypt 只吃 bytes 所以 encode() 把 str 轉成 bytes
+# gensalt() 給每組密碼隨機鹽 讓大家雜湊出來都不一樣(哪怕密碼一樣)
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+# 把輸入的密碼根據雜湊值中的鹽(完整雜湊的一部分前段)雜湊計算 看看跟 hased 是否一樣
+def verify_password(plain: str, hashed: str) -> bool:
+    return bcrypt.checkpw(plain.encode(), hashed.encode())
+
+
+# token 有三段： base64(header)  .  base64(payload)  .  signature
+# token = base64(header) . base64(payload) . HMAC-SHA256( base64(header).base64(payload), 密鑰 )
+# base64: 用只有安全字元的另一種寫法 避免內容被誤會為控制字元、分隔符號等等會在轉換過程中造成破壞風險的形式
+# header: 這個 token 本身的資訊：用什麼演算法簽的
+# payload: token 攜帶的實際資訊（一個小 dict）
+def create_access_token(user_id: int) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES) # 拿到 token 之後30分鐘到期
+    payload = {"sub": str(user_id), "exp": expire} # token 裡面裝了甚麼資料: 誰的token & 是否過期
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
 class AuthorDB(Base):
     __tablename__ = "authors"
 
@@ -37,9 +67,17 @@ class PaperDB(Base):
     title = Column(String, nullable=False)
     year = Column(Integer, nullable=False)
     author_id = Column(Integer, ForeignKey("authors.id"))
-    note = Column(String, nullable=True) # 新增欄位測試 alembic
+    note = Column(String, nullable=True)
 
     author = relationship("AuthorDB", back_populates="papers")
+
+
+class UserDB(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    email = Column(String, nullable=False, unique=True)
+    hashed_password = Column(String, nullable=False)
 
 
 # Base.metadata.create_all(engine) 
@@ -47,7 +85,6 @@ class PaperDB(Base):
 # 改用以下兩行指令讓 alembic 自動去管理資料庫的變動與同步
 # alembic revision --autogenerate -m "描述"
 # alembic upgrade head
-
 
 
 class Paper(BaseModel):
@@ -73,7 +110,7 @@ class PaperOut(BaseModel):
     year: int
     author: AuthorOut | None
 
-    model_config = ConfigDict(from_attributes=True) # 輸出的規格有這行是因為他預設是讀 dict 不會讀物件
+    model_config = ConfigDict(from_attributes=True) # 輸出的規格有這行是因為他預設是讀 dict 不會讀物件屬性裡面的值
 
 
 # 多個視角 model 讓每個 endpoint 可以拿到剛好的資料
@@ -96,6 +133,28 @@ class AuthorDetail(BaseModel):
 
 class DeleteOutput(BaseModel):
     id: int
+
+
+class UserCreate(BaseModel):
+    email: str
+    password: str
+
+
+class UserOut(BaseModel):
+    id: int
+    email: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer" # bear(持有) 誰有這個 token 就給過 不用額外證明
 
 
 @app.get("/papers", response_model= list[PaperOut])
@@ -156,3 +215,23 @@ def get_author(author_id: int, db: Session = Depends(get_db)):
     if not row:
         raise HTTPException(status_code=404, detail="author not found")
     return row
+
+
+@app.post("/register", response_model= UserOut)
+def register(user: UserCreate, db: Session = Depends(get_db)):
+    existing = db.query(UserDB).filter(UserDB.email == user.email).first() # .first()是一個終結條件 說給我第一筆符合條件的就好
+    if existing:
+        raise HTTPException(status_code=409, detail="email already registered")
+    new = UserDB(email = user.email, hashed_password = hash_password(user.password))
+    db.add(new)
+    db.commit()
+    return new
+
+
+@app.post("/login", response_model= TokenOut)
+def login(data: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(UserDB).filter(UserDB.email == data.email).first()
+    if not user or not verify_password(data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="invalid email or password")
+    token = create_access_token(user.id)
+    return {"access_token": token, "token_type": "bearer"}
