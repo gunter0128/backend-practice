@@ -87,6 +87,7 @@ class PaperDB(Base):
     year = Column(Integer, nullable=False)
     author_id = Column(Integer, ForeignKey("authors.id"))
     note = Column(String, nullable=True)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
     author = relationship("AuthorDB", back_populates="papers")
 
@@ -176,32 +177,37 @@ class TokenOut(BaseModel):
     token_type: str = "bearer" # bear(持有) 誰有這個 token 就給過 不用額外證明
 
 
+# owner_id=user.id 從驗證過的 token 來 並非客戶端的 body (自己宣稱)
 @app.get("/papers", response_model= list[PaperOut])
-def list_paper(db: Session = Depends(get_db)): # db 這個參數是一個session物件 透過 get_db 來產生他
-    return db.query(PaperDB).all()
+def list_paper(user: UserDB = Depends(get_current_user), db: Session = Depends(get_db)): # db 這個參數是一個session物件 透過 get_db 來產生他
+    return db.query(PaperDB).filter(PaperDB.owner_id == user.id).all()
 
 
 @app.post("/papers", response_model =PaperOut)
-def create_paper(paper: Paper, db: Session = Depends(get_db)):
-    new = PaperDB(title = paper.title, year = paper.year, author_id = paper.author_id)
+def create_paper(paper: Paper, user: UserDB = Depends(get_current_user), db: Session = Depends(get_db)):
+    new = PaperDB(title = paper.title, year = paper.year, author_id = paper.author_id, owner_id = user.id)
     db.add(new)
     db.commit()
     return new
 
 
 @app.get("/papers/{paper_id}", response_model= PaperOut)
-def get_paper(paper_id: int, db: Session = Depends(get_db)):
+def get_paper(paper_id: int, user: UserDB = Depends(get_current_user), db: Session = Depends(get_db)):
     row = db.get(PaperDB, paper_id)
     if not row:
         raise HTTPException(status_code=404, detail="paper not found")
+    if row.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="not your paper") # authorization 不對
     return row
 
 
 @app.delete("/papers/{paper_id}", response_model= DeleteOutput)
-def delete_paper(paper_id: int, db: Session = Depends(get_db)):
+def delete_paper(paper_id: int, user: UserDB = Depends(get_current_user), db: Session = Depends(get_db)):
     row = db.get(PaperDB, paper_id)
     if not row:
         raise HTTPException(status_code=404, detail="paper not found")
+    if row.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="not your paper")
     deleted_id = row.id
     db.delete(row)
     db.commit()
@@ -209,10 +215,12 @@ def delete_paper(paper_id: int, db: Session = Depends(get_db)):
 
 
 @app.put("/papers/{paper_id}", response_model= PaperOut)
-def update_paper(paper_id: int, paper: Paper, db: Session = Depends(get_db)):
+def update_paper(paper_id: int, paper: Paper, user: UserDB = Depends(get_current_user), db: Session = Depends(get_db)):
     row = db.get(PaperDB, paper_id)
     if not row:
         raise HTTPException(status_code=404, detail="paper not found")
+    if row.owner_id != user.id:
+            raise HTTPException(status_code=403, detail="not your paper")
     row.title = paper.title
     row.year = paper.year
     row.author_id = paper.author_id

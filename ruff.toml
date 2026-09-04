@@ -1,0 +1,14 @@
+# FastAPI 的 Depends / Query / Path 等放在參數預設值是正規用法，
+# 讓 Ruff 的 B008（function-call-in-default-argument）不要對它們報警。
+[lint.flake8-bugbear]
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Header",
+    "fastapi.Cookie",
+    "fastapi.Form",
+    "fastapi.File",
+    "fastapi.Security",
+]
