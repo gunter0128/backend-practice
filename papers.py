@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import create_engine, Column, Integer, String, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
@@ -13,6 +14,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 
 app = FastAPI()
+security = HTTPBearer()
 
 
 engine = create_engine("sqlite:///papers.db") # 要連線到的資料庫的種類跟位置
@@ -27,6 +29,23 @@ def get_db():
         yield db # 暫停 把 session 交給 endpoint
     finally:
         db.close()
+
+
+# 根據請求帶來的 token 判斷"這個請求是誰發的"
+# security 會去把 HTTP 請求中的 Authorization 這個 header
+# Authorization: Bearer(scheme) eyJhbGc...(credentials)
+# scheme: 這是甚麼授權方式 / credentials: 這種授權方式的實際憑證(這邊就是整個 token) 
+# security 是一個 HTTPBearer 的物件 scheme 是 Bearer 才會通過
+def get_current_user(creds: HTTPAuthorizationCredentials= Depends(security), db: Session = Depends(get_db)) -> "UserDB": 
+    token = creds.credentials # token 一整串被拿出來
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM]) # 用密鑰去算說 token 有沒有被竄改過或是正不正確
+    except jwt.InvalidTokenError: # 任何的 jwt error
+        raise HTTPException(status_code=401, detail="invalid token")
+    user = db.get(UserDB, int(payload["sub"]))
+    if not user:
+        raise HTTPException(status_code=401, detail="user not found")
+    return user
 
 
 # 因為 bcrypt 只吃 bytes 所以 encode() 把 str 轉成 bytes
@@ -235,3 +254,8 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="invalid email or password")
     token = create_access_token(user.id)
     return {"access_token": token, "token_type": "bearer"}
+
+
+@app.get("/me", response_model=UserOut)
+def me(user: UserDB = Depends(get_current_user)):
+    return user
